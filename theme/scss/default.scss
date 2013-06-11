@@ -2,7 +2,7 @@
 @import "compass/css3/columns";
 @import "compass/css3/user-interface";
 
-$social-tags: '#clj2cljs';
+$social-tags: '#haskvan';
 $brand-small-icon-size: 30px;
 
 $gray-1: #e6e6e6;
@@ -226,6 +226,7 @@ slides > slide {
 
     p {
       margin-bottom: 1em;
+      line-height: 40px;
     }
   }
 
@@ -924,7 +925,7 @@ aside.gdbar {
 .title-slide {
 
   hgroup {
-    bottom: 100px;
+    // bottom: 100px;
 
     h1 {
       font-size: 65px;
@@ -1082,4 +1083,14 @@ aside.gdbar {
   pre, code {
     font-family: monospace !important;
   }
+}
+
+// Custom Made
+
+[data-slide-num="6"] pre {
+  font-size: 24px;
+}
+
+slide ul li {
+  line-height: 40px;
 }

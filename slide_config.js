@@ -1,8 +1,8 @@
 var SLIDE_CONFIG = {
   // Slide settings
   settings: {
-    title: 'A shorter path from Clojure<br/>to Clojurescript',
-    subtitle: 'Moving your libraries to the Front-End',
+    title: 'Concurrency basics in Haskell',
+    subtitle: 'threads and locks made easy.',
     //eventTitle: 'Google I/O 2013',
     useBuilds: true, // Default: true. False will turn off slide animation builds.
     usePrettify: true, // Default: true

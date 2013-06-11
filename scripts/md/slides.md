@@ -1,14 +1,27 @@
-title: Common pains when porting to Clojurescript
+title: Disclaimer
+class: big
 
-- Host differences (Classes, Regexp, Functions)
+This is not a talk about parallelism, is about concurrency.
 
-- Small differences between Clojure and Clojurescript APIs
-<br><br>e.g.&nbsp; <code>-invoke</code> vs <code>invoke</code>
+Parallelism:
 
-- The ns hell
-<br><br>e.g.&nbsp; <code>:require</code> vs <code>:require-macro</code>
+- Program does same thing regardless of the amount of cores
+- Used to speed up pure (non-IO monad) Haskell code
 
-- Among others...
+Concurrency:
+
+- IO Monad everywhere!
+- Effects from multiple threads are interleaved (non-deterministic)
+- Necessary to deal with multiple sources of input/output
+
+---
+class: big image
+
+<article class="flexbox vcenter">
+  <img src="images/con_and_par.jpg" width="500px" height="400px" alt="Desktop Pic" title="Desktop Pic">
+  <footer class="source">Courtesy of Joe Armstrong</footer>
+</article>
+
 
 ---
 
@@ -18,30 +31,38 @@ build_lists: true
 
 Things we'll cover:
 
-- Port Clojure &#x2192; Clojurescript effectively and without pain
 
-- Test your librares in both languages using the same test suite
+* Basic Concurrency:
+    - forkIO
+    - MVars
 
-- Get fast feedback in development process
+
+* Async Exceptions:
+    - cancellation
+    - timeout
+
+
+* Software Transaction Memory (STM)
 
 ---
 
-title: Simple Clojure &#x2192; Clojurescript
-subtitle: Introducing lein-dalap
+title: Threading
+subtitle: using forkIO
 class: segue nobackground dark
 
 ---
 
-title: lein-dalap provides
+title: Forking threads
 
-- Inspired by [cljx](https://github.com/lynaghk/cljx) (kudos to Kevin Lynagh)
+<pre class="prettyprint lang-hs bigger" data-lang="HASKELL">
+forkIO :: IO () -> IO ThreadId
+</pre>
 
-- Clojure files as input, Clojurescript files as output
+- Creates a new thread to run on the IO action
 
-- Use Clojure meta tags to adapt/transform forms to Clojurescript
 
-- Provide transformation rules <em>a la css</em> using the [dalap](http://github.com/BirdseyeSoftware/dalap)
-<br><br>instead of [kibit](https://github.com/jonase/kibit)
+- new thread runs "at the same time" as the current thread.
+
 
 <aside class="note">
 
@@ -51,495 +72,604 @@ title: lein-dalap provides
 
 </aside>
 
-<!---
-
-title: Installing lein-dalap
-subtitle: <code>project.clj</code> changes
-
-<pre class="prettyprint lang-clj" data-lang="project.clj">
-(defproject awesome-library
-  ;; ..
-  <b>:plugins [[lein-cljsbuild "0.2.9"]
-           [com.birdseye-sw/lein-dalap "0.1.0"]]
-
-  <br/>
-  :hooks [leiningen.dalap]</b>
-  ;; ..
-  )
-
-</pre>
--->
-
 ---
 
-title: Get your rules handled
-subtitle: Add <code>dalap_rules.clj</code>
+title: Interleaving example
 
-<pre class="prettyprint lang-clj" data-lang="project/dalap_rules.clj">
-  {
-   ;; input clojure file -> output clojurescript file
-   <b>["src/clj/awesome_library/core.clj" "src/cljs/awesome_library/core.cljs"]</b>
-   [ #_(Opt. additional transformation rules go here) ]
+<pre class="prettyprint lang-hs" data-lang="HASKELL">
+import Control.Concurrent
+import Control.Monad
+import System.IO
 
-  }
+main = do
+  hSetBuffering stdout NoBuffering
+  -- forkIO :: IO () -> IO ThreadId
+  forkIO $ forever (putChar 'A')
+  forkIO $ forever (putChar 'B')
+  threadDelay (10 ^ 6)
+</pre>
+
+
+<pre class="" data-lang="BASH">
+$ ghc fork.hs
+[1 of 1] Compiling Main ( fork.hs, fork.o ) Linking fork ...
+
+$ ./fork | tail -c 159
+AAAAAAAAABABABABABABABABABABABABABABABABABABABABABABAB
+ABABABABABABABABABABABABABABABABABABABABABABABABABABAB
+ABABABABABABABABABABABABABABABABABABABABABABABABABABAB
 </pre>
 
 ---
 
-title: Make forms Clojure only
-subtitle: The :clj meta tag
+title: A note about performance
+subtitle: threading is freaking cheap!
 
-Excludes Clojure forms from code transformation.
+1 MILLION threads require around 1.5 GB of storage (approx. 1.5k per thread)
 
-<pre class="prettyprint lang-clj" data-lang="CLOJURE INPUT">
-(deftest upper-case-test
-  (is (= (upper-case "hello world") "HELLO WORLD")))
-
-<b>^:clj</b>
-(deftest java-io-test
-  (assert (instance? File (file "/fixture/one.txt"))))
-</pre>
-
-<pre class="prettyprint lang-clj" data-lang="CLOJURESCRIPT OUTPUT">
-(deftest upper-case-test
-  (is (= (upper-case "hello world") "HELLO WORLD")))
-</pre>
+<center>
+<img src="/images/use_the_forkio.jpeg" class="reflect" alt="Use the forkIO!">
+</center>
 
 ---
 
-title: Make forms Clojurescript only
-subtitle: Ignore reader macro with :cljs at the start
-
-Add Clojurescript, without breaking your Clojure code.
-
-<pre class="prettyprint lang-clj" data-lang="CLOJURE INPUT">
-(ns clout.test.core
-  ^:clj (:require [ring.mock.request :refer [request]])
-  <b>#_(:cljs</b> (:require [goog.Uri :as uri]))<b>)</b>
-
-#_(<b>:cljs-do</b>
-  (defn request [method uri]
-       {:uri (.getPath (goog.Uri. uri))
-        :request-method method})
-  (defn other-fn []
-     ;...
-  ))
-</pre>
-
----
-
-title: Make forms Clojurescript only
-subtitle: Ignore reader macro with :cljs at the start
-
-Add Clojurescript, without breaking your Clojure code.
-
-<pre class="prettyprint lang-clj" data-lang="CLOJURESCRIPT OUTPUT">
-(ns clout.test.core
-  (:require [goog.Uri :as uri]))
-
-<b>(do
-  (defn request [method uri]
-       {:uri (.getPath (goog.Uri. uri))
-        :request-method method})
-  (defn other-fn []
-       ;...
-  ))</b>
-
-</pre>
-
----
-
-title: Handling differences in <code>ns</code> macro
-subtitle: meta tags FTW
-
-<pre class="prettyprint lang-clj" data-lang="CLOJURE INPUT">
-(ns monads.test.core-test
-  (:require [monads.core :as m]
-            <b>#_(:cljs</b> [monads.core writer-transformer state-transformer])<b>)</b>
-  <b>^:cljs-macro</b> (:require [monads.macros :as monadic])
-  <b>^:clj</b> (:import [monads.core writer-transformer state-transformer]))
-</pre>
-
-<pre class="prettyprint lang-clj" data-lang="CLOJURESCRIPT OUTPUT">
-(ns monads.test.core-test
-  (:require [monads.core :as m]
-            [monads.core writer-transformer state-transformer])
-  (:require-macros [monads.macros :as monadic]))
-</pre>
-
----
-
-title: Replace forms via meta tags
-subtitle: :cljs meta tag
-
-<pre class="prettyprint lang-clj" data-lang="CLOJURE INPUT">
-<b>^{:cljs</b>
-  '(ns monads.test.core-test
-     (:require [monads.core :as m]
-               [monads.core writer-transformer state-transformer])
-     (:require-macros [monads.macros :as monadic]))<b>}</b>
-(ns monads.test.core-test
-  (:require [monads.core :as m]
-            [monads.macros :as monadic])
-  (:import [monads.core writer-transformer state-transformer])
-</pre>
-
-<pre class="prettyprint lang-clj" data-lang="CLOJURESCRIPT OUTPUT">
-(ns monads.test.core-test
-  (:require [monads.core :as m]
-            [monads.core writer-transformer state-transformer])
-  (:require-macros [monads.macros :as monadic]))
-</pre>
-
----
-
-title: Transform your code via selectors (a la CSS)
-subtitle: Selectors work in a per file basis.
-
-<pre class="prettyprint lang-clj" data-lang="project/dalap_rules.clj">
-  {
-   ;; Key a mapping from a Clojure file to a Clojurescript file
-   ["src/clj/awesome_library/core.clj" "src/cljs/awesome_library/core.cljs"]
-
-   [
-    ;; Some rules that lein-dalap provides by default
-    <b>(dalap/when (dalap/has-meta? :cljs))
-    (dalap/transform (dalap/replace-with-meta :cljs))</b>
-
-
-    ;; etc ..
-   ]
-   ;; .. Other files to transform
-  }
-</pre>
-
----
-
-title: Transform your code via selectors (a la CSS)
-subtitle: Selectors work in a per file basis.
-
-<pre class="prettyprint lang-clj" data-lang="project/dalap_rules.clj">
-  {
-   ;; Key a mapping from a Clojure file to a Clojurescript file
-   ["src/clj/awesome_library/core.clj" "src/cljs/awesome_library/core.cljs"]
-
-   [
-    ;; pairs
-    <b>'java.lang.String 'string
-    'deref '-deref</b>
-
-    ;; etc ..
-   ]
-   ;; .. Other files to transform
-  }
-</pre>
-
----
-
-title: Default transformation rules.
-build_lists: true
-
-- All tags shown so far are implemented using code selectors.
-<br><br>e.g &nbsp; <code>:clj, :cljs, :cljs-macro</code>
-
-
-- Fully qualified Java types are transformed to their JS equivalent.
-<br><br>e.g &nbsp; <code>java.lang.String</code> will be mapped to JS' <code>string</code>
-
----
-
-title: API is extensible
-build_lists: true
-
-- Add your own tags for code transformation.
-
-- Add new selection rules by exploring the CLJ form tree.
-
-- Specify code transformations in a granular level through <br><code>project/dalap_rules.clj</code>.
-
----
-
-title: Same testsuite, many platforms.
-subtitle: Introducing buster-cljs
+title: Communication
+subtitle: using MVars
 class: segue nobackground dark
 
 ---
 
-title: How can we test Clojurescript?
-subtitle: Reuse options available in JS
+title: MVar
+subtitle: The most basic concurrency tool in Haskell
 
-Started by checking the usual suspects
 
-- Jasmine
-- Mocha
-- Qunit
-- <b>busterjs</b>
+<pre class="prettyprint lang-hs" data-lang="HASKELL">
+data MVar a -- Abstract Constructor
 
----
-
-title: buster-cljs provides:
-
-- Compatible clojuresque API for both Clojure and Clojurescript
-
-- Not a new Clojure test library, just wraps clojure.test behind the curtains
-
-- Parallel test execution in multiple envs (e.g nodejs, browser, JVM)<br><br> using busterjs
-
----
-
-title: Installing buster-cljs
-subtitle: <code>project.clj</code> changes
-
-<pre class="prettyprint lang-clj" data-lang="project.clj">
-(defproject awesome-library
-  ;; ..
-  <b>:dependencies [ ;; other dependencies
-                     [com.birdseye-sw/buster-cljs "0.1.0"]]</b>
-  ;; ..
-  )
+newEmptyMVar :: IO (MVar a)
+takeMVar     :: MVar a -> IO a
+putMVar      :: MVar a -> a -> IO ()
 </pre>
 
+- Wraps a value (Image a wrapper class in OO land)
+- It has 2 states: <b>empty</b> or <b>full</b>
+- When full and want to put a value, <b>blocks</b>
+- When empty and want to take a value, <b>blocks</b>
+- Doesn't block otherwise
 
 ---
 
-title: Example of busterjs syntax
-subtitle: BDD style
+title: Downloading URLs concurrently
+subtitle: First attempt
 
-<pre class="prettyprint" data-lang="JAVASCRIPT">
-buster.describe("Adding numbers", function() {
-  buster.describe("natural numbers", function() {
-    buster.it("adds correctly two numbers", function(){
-      buster.assert((2 + 2) === 4);
-    });
-  });
-  buster.describe("floating numbers", function() {
-    // ...
-  });
-});
+<pre class="prettyprint lang-hs" data-lang="HASKELL">
+getURL :: String -> IO String
+
+downloadPages = do
+  m1 <- newEmptyMVar
+  m2 <- newEmptyMVar
+
+  forkIO $ getURL "http://www.wikipedia.org/wiki/haskell" >>= putMVar m1
+  forkIO $ getURL "http://www.haskell.org/" >>= putMVar m2
+
+  r1 <- takeMVar m1
+  r2 <- takeMVar m2
+
+  return (r1, r2)
 </pre>
 
 ---
 
-title: Adapting clojure.test to busterjs syntax
-subtitle: Same semantics
+title: Downloading URLs concurrently
+subtitle: Abstracting the pattern
 
-<pre class="prettyprint lang-clj" data-lang="CLOJURE">
-(deftest adding-numbers
-  (testing "natural numbers"
-    (testing "adds correctly two numbers"
-      (is (= (+ 2 2) 4)))
-   (testing "floating numbers"
-     ;; ..
-     )))
+<pre class="prettyprint lang-hs" data-lang="HASKELL">
+
+newtype Async a = Async (MVar a)
+
+async :: IO a -> IO (Async a)
+async action = do
+  m <- newEmptyMVar
+  forkIO $ action >>= putMVar m
+  return (Async m)
+
+wait :: Async a -> IO a
+wait (Async m) = readMVar m
+-- ^ read != take, doesn't take out the value from
+-- the MVar box
+
 </pre>
 
 ---
 
-title: 1:1 clojure.test <=> busterjs
+title: Downloading URLs concurrently
+subtitle: Second Attempt
 
-<table>
- <thead>
-  <tr>
-   <th>clojure.test</th>
-   <th>busterjs</th>
-  </tr>
- </thead>
- <tbody>
-   <tr>
-     <td><code>deftest<code></td>
-     <td><code>buster.describe</code></td>
-   </tr>
-   <tr>
-     <td><code>testing</code></td>
-     <td><code>buster.describe</code></td>
-   </tr>
-   <tr>
-     <td><code>testing</code></td>
-     <td><code>buster.it</code></td>
-   </tr>
-   <tr>
-     <td><code>is</code></td>
-     <td><code>buster.assert</code></td>
-   </tr>
- </tbody>
-</table>
+<pre class="prettyprint lang-hs" data-lang="HASKELL">
 
+downloadPages = do
 
+  a1 <- async $ getURL "http://www.wikipedia.org/wiki/haskell"
+  a2 <- async $ getURL "http://www.haskell.org/"
+  r1 <- wait a1
+  r2 <- wait a2
+
+  return (r1, r2)
+
+</pre>
 
 ---
 
-title: busterjs + clojure.test
+title: Downloading URLs concurrently
+subtitle: Third Attempt
 
-<pre class="prettyprint lang-clj" data-lang="CLOJURE">
-(<b>deftest</b> adding-numbers
-  (<b>describe</b> "natural numbers"
-    (<b>it</b> "adds correctly two numbers"
-      (<b>is</b> (= (+ 2 2) 4)))
-   (describe "floating numbers"
-     ;; ..
-     )))
+<pre class="prettyprint lang-hs" data-lang="HASKELL">
+sites = [ "http://www.google.com"
+        , "http://www.bing.com"
+        ...
+        ]
+
+downloadPages = mapM (async . http) sites >>= mapM wait
+  where
+    http url = do
+      (result, time) <- timeit $ getURL url
+      printf "downloaded: %s (%d bytes, %.2fs)\n" url (length result) time
+</pre>
+
+<pre class="" data-lang="OUTPUT">
+downloaded: http://www.google.com (14524 bytes, 0.17s)
+downloaded: http://www.bing.com (24740 bytes, 0.18s)
+downloaded: http://www.yahoo.com (153065 bytes, 1.11s)
+</pre>
+
+---
+
+title: An MVar could be:
+
+- <b>lock</b>
+    - \``MVar ()`\` behaves like a lock: full is unlocked, empty is locked
+    - Can be used as a mutex to protect some other shared state
+
+- <b>one-spot-channel</b>
+    - Since an MVar holds at most one value, it behaves like an
+      async channel with buffer-size of one
+
+- <b>building block</b>
+    - MVar can be used to build many different concurrent data
+      structures/abstractions
+
+---
+
+title: A note on fairness in MVars
+
+- Threads blocked on an MVar are processed in a FIFO fashion
+
+- Each `putMVar` wakes exactly <b>one</b> thread, and performs
+  blocked operation atomically
+
+- Fairness can lead to alternation when two threads compete for an MVar
+    - thread A: takeMVar (succeeds)
+    - thread B: takeMVar (blocks)
+    - thread A: putMVar (succeeds, and wakes thread B)
+    - thread A: takeMVar again (blocks)
+    - Cannot break cycle until a thread is pre-empted (re-scheduled)
+      while MVar is full
+
+- MVar contention may be expensive!
+
+---
+
+title: Unbound Channels
+
+<pre class="prettyprint lang-hs" data-lang="HASKELL">
+data Chan a
+
+newChan :: IO (Chan a)
+writeChan :: Chan a -> a -> IO ()
+readChan  :: Chan a -> IO a
+</pre>
+
+- Writes to the Chan don't block
+- Reads to Chan don't block until Chan is empty
+- Great to use as a task queue on a producer/consumer scenario
+- Implemented using a list-like of MVars internally
+
+---
+
+title: Interruption / Cancelation
+subtitle: asynchrounous exceptions
+class: segue nobackground dark
+
+---
+
+title: Motivations
+
+- There are many cases when we want to interrupt a thread:
+    - Web browser stop button
+    - Timeout on slow connections
+    - Cancel an operation that is pending, but not needed any more
+    - etc.
+
+---
+
+title: Interrupting a thread
+subtitle: introducing `throwTo`
+
+<pre class="prettyprint lang-hs" data-lang="HASKELL">
+throwTo :: Exception e => ThreadId -> e -> IO ()
+</pre>
+
+- Throws an async exception `e` on the thread pointed by the `ThreadId`
+- Interruption appears as an exception
+    - Good: We need exception handling to clean up possible errors, the
+      same handlers could be used for interruptions too.
+    - Exception safe code will be fine with an interruption.
+
+    <pre class="prettyprint lang-hs" data-lang="HASKELL">
+      bracket (newTempFile "temp")       -- open
+              (\file -> removeFile file) -- clenaup
+              (\file -> ...)             -- do
+    </pre>
+
+---
+
+title: Example
+subtitle: Extending Async to handle interruptions
+
+Let's add a cancel function to the Async type
+
+<pre class="prettyprint lang-hs" data-lang="HASKELL">
+newtype Async a = Async (MVar a)
+
+async :: IO a -> IO (Async a)
+async io = do
+  m <- newEmptyMVar
+  forkIO $ do r <- io; putMVar m r
+  return (Async m)
+
+wait :: Async a -> IO a
+wait (Async m) = readMVar m
+
+-- we want to add
+cancel :: Async a -> IO ()
 </pre>
 
 ---
 
 title: Example
-subtitle: Works both in Clojure and Clojurescript
+subtitle: Modify Async definition
 
-<pre class="prettyprint lang-clj" data-lang="CLOJURE">
-(ns awesome-library.test.core-test
-  #_(:cljs (:require-macros [buster-cljs.macros :refer
-                               [initialize-buster deftest describe it is]]))
-  ^:clj (:require [buster-cljs.clojure :refer [deftest describe it is]]))
+<pre class="prettyprint lang-hs" data-lang="HASKELL">
+newtype Async a = Async <b>ThreadId</b> (MVar a)
 
-#_(:cljs-do (initialize-buster))
+async :: IO a -> IO (Async a)
+async io = do
+  m <- newEmptyMVar
+  <b>tid</b> <- forkIO $ do r <- io; putMVar m r
+  return (Async <b>tid</b> m)
+<b>
+cancel :: Async a -> IO ()
+cancel (Async tid _) = throwTo tid ThreadKilled
+</b>
+</pre>
 
-(deftest adding-numbers
-  (<b>describe</b> "natural numbers"
-    (<b>it</b> "adds correctly two numbers"
-      (is (= (+ 2 2) 4)))
-   (describe "floating numbers"
-     ;; ..
-     )))
+
+---
+
+title: Example
+subtitle: Modify Async definition
+
+But what about <b>wait</b>? Previously it had type
+
+<pre class="prettyprint lang-hs" data-lang="HASKELL">
+  wait :: Async a -> IO ()
+</pre>
+
+Should it return if the `Async` was cancelled?
+
+Cancellation is an exception, so wait should return the Exception
+that was thrown...
+
+<b>Extra WIN</b>: safe handling of other errors as well
+
+---
+
+title: Example
+subtitle: Async with exception support
+
+<pre class="prettyprint lang-hs" data-lang="HASKELL">
+
+newtype Async a = Async ThreadId <b>(MVar (Either SomeException a))</b>
+
+async :: IO a -> IO (Async a)
+async io = do
+  m <- newEmptyMVar
+  tid <- forkIO $ <b>returnRight `catch` returnLeft</b>
+where
+  <b>returnRight = do
+    r <- io
+    putMVar m (Right r)
+  returnLeft (e :: SomeException) =
+    putMVar m (Left e)</b>
+
+<b>wait :: Async a -> IO (Either SomeException a)</b>
+wait (Async _ var) = readMVar var
+
 </pre>
 
 ---
 
-title: Example - protocol-monads library
-subtitle: JVM execution (clojure.test)
+title: Example
+subtitle: Using Async with cancellation
 
-<pre data-lang="BASH">
-<b>$ lein test</b>
+<pre class="prettyprint lang-hs" data-lang="HASKELL">
 
-lein test monads.test.core
+main = do
+  asyncs <- mapM (async . http) sites
 
-Ran 72 tests containing 139 assertions.
-0 failures, 0 errors.
+  forkIO $ do
+    hSetBuffering stdin NoBuffering
+    forever $ do
+      c <- getChar
+      -- hit q stops downloads
+      <b>when (c == 'q') $ mapM_ cancel asyncs</b>
+
+  rs <- mapM wait asyncs
+  -- ^ blocks until all async actions are done / cancelled
+
+  printf "%d/%d finished\n" (length (rights rs)) (length rs)
+
 </pre>
 
 ---
 
-title: Example - protocol-monads library
-subtitle: nodejs and browsers (busterjs)
+title: Example
+subtitle: Output
+build_lists: true
 
-<article class="smaller">
-<pre data-lang="BASH">
-# $ npm install
-# $ lein cljsbuild once
-
-<b>$ ./node_modules/buster/bin/buster-test -e browser</b>
-PhantomJS 1.8.2, Linux:        .................................................
-Safari 6.0.2, Mac OS X 10.7.5: .................................................
-Firefox 19.0, Mac OS X 10.7:   .................................................
-426 test cases, 432 tests, 774 assertions, 0 failures, 0 errors, 0 timeouts
-
-<b>$ ./node_modules/buster/bin/buster-test -e node -r quiet</b>
-71 test cases, 72 tests, 129 assertions, 0 failures, 0 errors, 0 timeouts
+<pre class="" data-lang="BASH">
+./geturlscancel
+downloaded: http://www.google.com (14538 bytes, 0.17s)
+downloaded: http://www.bing.com (24740 bytes, 0.22s)
+q2/5 Finished
 </pre>
-</article>
+
+Points to note:
+
+- We are using a complicated HTTP library underneath, yet it
+  supports interruption automatically
+
+- Having async interruption be the default is powerful
+
+- Not a silver bullet: With truly mutable state, interruptions
+  can be difficult.
+
+- STATE PROPAGATED EVERYWHERE == COMPLEXITY
+
 
 ---
 
-class: big
-
-<article>
-<iframe data-src="vendor/busterstatic/buster.html" src="vendor/busterstatic/buster.html"></iframe>
-</article>
-
----
-
-title: Continuous testing with TravisCI
-subtitle: JVM, node and headless browser
-
-<article class="smaller">
-<pre class="prettyprint lang-yaml" data-lang=".travis.yml">
-language:
-  - node_js
-  - clojure
-lein: lein2
-jdk:
-  - oraclejdk7
-node_js:
-  - "0.8"
-before_script:
-  - "export DISPLAY=:99:0"
-  <b>- "lein2 cljsbuild once"
-  - "./node_modules/buster/bin/buster-server &"
-  - "sleep 3"
-  - "phantomjs ./node_modules/buster/script/phantom.js &"
-  - "sleep 3"</b>
-script:
-  <b>- lein2 test && npm test</b>
-</pre>
-</article>
-
----
-
-class: big
-
-<article>
-<iframe data-src="vendor/travisci/travisci.html" src="vendor/travisci/travisci.html"></iframe>
-</article>
-
----
-
-title: Fast feedback loop
-subtitle: Making Emacs + nrepl work for you (demo)
+title: Software Transactional Memory
 class: segue nobackground dark
 
 ---
 
-title: Development environment
-class: image
+title: STM
+subtitle: What is it?
 
-![Development Environment Diagram](images/emacs_clojure_development.jpg)
+- An alternative to MVar for managing
+    - shared state
+    - communication
 
----
-
-title: Make your library usable in the front-end
-subtitle: Some projects that made the jump
-
-Third Party
-
-- [protocol-monads](http://github.com/jduey/protocol-monads)
-
-- [clout](http://github.com//clout)
-
-Internal Projects
-
-- [dalap](http://github.com/BirdseyeSoftware/dalap)
-
-- [dalap-html](http://github.com/BirdseyeSoftware/dalap-html)
-
-Your awesome library/project?
-
-<aside class="note">
-
-- Helped finding bugs on Clojurescript in the translation process
-
-</aside>
+- STM has several advantages:
+    - compositional (Monads FTW)
+    - much easier to get right (no deadlocks)
+    - much easier to manage error conditions (async exceptions included)
 
 ---
 
-title: What to do?
+title: Example
+subtitle: A Window Manager
 
-- Old library: if it makes sense, make it front-end usable
+<article class="flexbox vcenter">
+  <img src="images/Desktop.png" width="500px" height="400px" alt="Desktop Pic" title="Desktop Pic">
+</article>
 
-- New library: Consider Clojurescript in your library from the [very start]()
+---
 
-- Make Clojurescript more awesome!
+title: Window Manager
+subtitle: Implementation details
 
-<!---
-title: Why busterjs?
+Suppose we want to have one thread for each input/output stream:
+
+- On thread to listen to the user
+- One thread for each client application
+- One thread to render the display
+- All threads share the state of the desktops, at the same time.
+
+How should we represent this using Haskell's toolbelt?
+
+---
+
+title: Window Manager
+subtitle: Option 1: a single MVar for the whole state
+
+<pre class="prettyprint lang-hs" data-lang="HASKELL">
+type Display = MVar (Map Desktop (Set Window))
+</pre>
+Advantages:
+
+- Simple
+
+Disadvantages:
+
+- Single point of contention.
+    - Missbehaving thread can block everyone else
+    - Performance penalties
+
+---
+
+title: Window Manager
+subtitle: Option 2: an MVar per Desktop
+
+<pre class="prettyprint lang-hs" data-lang="HASKELL">
+<strike>type Display = MVar (Map Desktop (Set Window))</strike>
+type Display = Map Desktop (MVar (Set Window))
+</pre>
+
+Avoids single point of contention, but new problem emerges:
+
+<pre class="prettyprint lang-hs" data-lang="HASKELL">
+moveWindow :: Display -> Window -> Desktop -> Desktop -> IO ()
+moveWindow disp win desktopA desktopB = do
+    <b>windowSetA <- takeMVar mWindowSetA
+    -- other threads say hello to inconsistent intermmidate state
+    windowSetB <- takeMVar mWindowSetB</b>
+    putMVar mWindowSetA (Set.delete win windowSetA)
+    putMVar mWindowSetB (Set.insert win windowSetB)
+  where
+    mWindowSetA = fromJust (Map.lookup desktopA disp)
+    mWindowSetB = fromJust (Map.lookup desktopB disp)
+</pre>
+
+---
+
+title: Window Manager
+subtitle: Dinning Philosophers
 build_lists: true
 
-Testing API had to be good, but it wasn't the most important point.
+<pre class="prettyprint lang-hs" data-lang="HASKELL">
+moveWindow disp win desktopA desktopB = do
+    <b>windowSetA <- takeMVar mWindowSetA
+    windowSetB <- takeMVar mWindowSetB</b>
+    ...
+</pre>
 
-<b>Main Feature</b>: execute test suites in multiple browsers, in
-parallel
+- Thread 1 (T1): calls `moveWindow disp w1 a b`
+- Thread 2 (T2): calls `moveWindow disp w2 b a`
+- T1 takes `MVar` of `Desktop a`
+- T2 takes `MVar` of `Desktop b`
+- T1 tries to take `MVar` for `Desktop b`, blocks...
+- T2 tries to take `MVar` for `Desktop a`, blocks...
+- <b>DEADLOCK</b>
 
-1. 1) Slave your many vendored browsers (phantomJS for headless testing)
+---
 
-2. 2) Push your testsuite to each of them in parallel
+title: Window Manager
+subtitle: Can we solve this with MVars?
+build_lists: true
 
-3. 3) Get results back in the terminal
--->
+We could, but requires a high price:
+
+- Impose fixed ordering on `MVars`, make `takeMVar` calls in the same order in <b>every</b> thread.
+    - Libraries must obey this rules
+    - Error-Checking can be done at runtime, complicated...
+    - <img src="images/fuckthat.jpg"></img>
+
+---
+
+title: Window Manager
+subtitle: STM to the rescue
+
+<pre class="prettyprint lang-hs" data-lang="HASKELL">
+type Display = Map Desktop <b>(TVar (Set Window))</b>
+
+moveWindow :: Display -> Window -> Desktop -> Desktop -> IO ()
+moveWindow disp win a b = <b>atomically</b> $ do
+  wa <- readTVar ma
+  wb <- readTVar mb
+  writeTVar ma (Set.delete win wa)
+  writeTVar mb (Set.insert win wb)
+where
+  ma = fromJust (Map.lookup a disp)
+  mb = fromJust (Map.lookup a disp)
+</pre>
+
+- Operations inside `atomically` happen indivisibly to the rest of the program (transaction)
+- Ordering is irrelevant - we can interleave read/write actions
+
+---
+
+title: STM
+subtitle: Basic API
+
+<pre class="prettyprint lang-hs" data-lang="HASKELL">
+
+data STM a -- abstract
+instance Monad STM -- amongst other things
+atomically :: STM a -> IO a
+
+data TVar a -- abstract
+newTVar   :: STM (TVar a)
+readTVar  :: TVar a -> STM a
+writeTVar :: TVar a -> a -> STM ()
+
+</pre>
+
+Implementation doesn't use a global lock, two transactions operating on
+disjoint sets of TVars can work simultaneously.
+
+---
+
+title: STM
+subtitle: Composability
+
+Write an operation to swap to Windows
+
+<pre class="prettyprint lang-hs" data-lang="HASKELL">
+swapWindows :: Display
+            -> Window -> Desktop
+            -> Window -> Desktop
+            -> IO ()
+</pre>
+
+With `MVars` we would have to write a special purpose routine, on STM on the other hand
+
+<pre class="prettyprint lang-hs" data-lang="HASKELL">
+swapWindows disp w a v b = <b>atomically</b> $ do
+  moveWindowsSTM disp w a b
+  moveWindowsSTM disp v b a
+  -- moveWindows fn seen previously on the STM monad
+</pre>
+
+STM allows composition of stateful operations into larger transactions
+
+---
+
+title: STM
+subtitle: Blocking
+
+Concurrent algorithms often times need a way to block execution
+to wait for some condition to comply
+
+<pre class="prettyprint lang-hs" data-lang="HASKELL">
+retry :: STM a
+</pre>
+
+Semantics of retry is "try current transaction again", when a TVar in the transaction
+changes (no busy loop)
+
+<pre class="prettyprint lang-hs" data-lang="HASKELL">
+atomically $ do
+  x <- readTVar v
+  if x == 0
+    then retry
+    else return x
+</pre>
+
+This thread will resume when some other thread puts in the `TVar v`
+a value that is not 0.
+
+---
+
+title: STM
+subtitle: Benefits and Woes
+
+- Composable atomicity
+- Composable blocking
+- Robustness: easy error handling
+- Slow on very large transactions
+- Why would you use MVar?
+    - fairness
+    - single wakeup
+    - performance
