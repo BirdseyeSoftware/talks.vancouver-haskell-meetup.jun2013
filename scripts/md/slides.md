@@ -1,7 +1,7 @@
 title: Disclaimer
 class: big
 
-This is not a talk about parallelism, is about concurrency.
+About concurrency, not parallelism
 
 Parallelism:
 
@@ -13,6 +13,23 @@ Concurrency:
 - IO Monad everywhere!
 - Effects from multiple threads are interleaved (non-deterministic)
 - Necessary to deal with multiple sources of input/output
+
+<aside class="note">
+
+<ul>
+<li>Independently of the # of cores, it will do the same thing</li>
+
+<li>pure</li>
+
+<li>IO Monad everywhere, at least the construct parts</li>
+
+<li>All actions are hapenning at the same time, results may vary in different executions</li>
+
+<li>User Input / Server Background input, etc</li>
+</ul>
+
+</aside>
+
 
 ---
 class: big image
@@ -58,18 +75,15 @@ title: Forking threads
 forkIO :: IO () -> IO ThreadId
 </pre>
 
-- Creates a new thread to run on the IO action
-
-
+- Creates a new thread to execute the given IO action
 - new thread runs "at the same time" as the current thread.
 
-
 <aside class="note">
-
-- dalap single traversal with custom tree modification at any level of the tree
-- kibit uses backtracking to accomplish this
-- You may both, kibit on your dalap transformation functions
-
+<ul>
+<li>What can you do with a ThreadId?</li>
+<li> Compare threads </li>
+<li> Send messages to threads (more on that later)</li>
+</ul>
 </aside>
 
 ---
@@ -83,7 +97,7 @@ import System.IO
 
 main = do
   hSetBuffering stdout NoBuffering
-  -- forkIO :: IO () -> IO ThreadId
+  <b>-- forkIO :: IO () -> IO ThreadId</b>
   forkIO $ forever (putChar 'A')
   forkIO $ forever (putChar 'B')
   threadDelay (10 ^ 6)
@@ -103,13 +117,20 @@ ABABABABABABABABABABABABABABABABABABABABABABABABABABAB
 ---
 
 title: A note about performance
-subtitle: threading is freaking cheap!
+subtitle: Green threads are freaking cheap!
 
-1 MILLION threads require around 1.5 GB of storage (approx. 1.5k per thread)
+1 MILLION green threads require around 1.5 GB of memory space (approx. 1.5k per thread)
 
 <center>
 <img src="/images/use_the_forkio.jpeg" class="reflect" alt="Use the forkIO!">
 </center>
+
+<aside class="note">
+They are not system threads, this threads are managed by an Internal IO scheduler</br>
+
+Feel free to use as much of them as you need
+
+</aside>
 
 ---
 
@@ -137,6 +158,14 @@ putMVar      :: MVar a -> a -> IO ()
 - When empty and want to take a value, <b>blocks</b>
 - Doesn't block otherwise
 
+<aside class="note">
+<ul>
+<li>Like to think of an MVar as a Pint of Beer, Beer => Content; Glass => MVar</li>
+<li>Glass can have two states, filled with drink or empty</li>
+<li>Can't drink from an empty glass, wait/block until is full</li>
+<li>Can't fill up a full glass, wait/block until it is consumed</li>
+</ul>
+</aside>
 ---
 
 title: Downloading URLs concurrently
@@ -152,8 +181,8 @@ downloadPages = do
   forkIO $ getURL "http://www.wikipedia.org/wiki/haskell" >>= putMVar m1
   forkIO $ getURL "http://www.haskell.org/" >>= putMVar m2
 
-  r1 <- takeMVar m1
-  r2 <- takeMVar m2
+  <b>r1 <- takeMVar m1
+  r2 <- takeMVar m2</b>
 
   return (r1, r2)
 </pre>
@@ -170,11 +199,11 @@ newtype Async a = Async (MVar a)
 async :: IO a -> IO (Async a)
 async action = do
   m <- newEmptyMVar
-  forkIO $ action >>= putMVar m
+  forkIO $ do { result <- action; putMVar m result; }
   return (Async m)
 
 wait :: Async a -> IO a
-wait (Async m) = readMVar m
+wait (Async m) = <b>readMVar m</b>
 -- ^ read != take, doesn't take out the value from
 -- the MVar box
 
@@ -209,7 +238,7 @@ sites = [ "http://www.google.com"
         ...
         ]
 
-downloadPages = mapM (async . http) sites >>= mapM wait
+downloadPages = mapM <b>(async . http)</b> sites >>= <b>mapM wait</b>
   where
     http url = do
       (result, time) <- timeit $ getURL url
@@ -231,22 +260,19 @@ title: An MVar could be:
     - Can be used as a mutex to protect some other shared state
 
 - <b>one-spot-channel</b>
-    - Since an MVar holds at most one value, it behaves like an
-      async channel with buffer-size of one
+    - `MVars` holds at most one value => async channel of buffer-size one
 
 - <b>building block</b>
-    - MVar can be used to build many different concurrent data
-      structures/abstractions
+    - `MVars` can be used to build other concurrent data
+      structures / abstractions (e.g `Async`)
 
 ---
 
 title: A note on fairness in MVars
 
-- Threads blocked on an MVar are processed in a FIFO fashion
-
-- Each `putMVar` wakes exactly <b>one</b> thread, and performs
-  blocked operation atomically
-
+- Blocks in FIFO fashion
+- `putMVar` wakes exactly <b>one</b> thread and is atomic
+- `MVar` contention may be expensive.
 - Fairness can lead to alternation when two threads compete for an MVar
     - thread A: takeMVar (succeeds)
     - thread B: takeMVar (blocks)
@@ -255,7 +281,6 @@ title: A note on fairness in MVars
     - Cannot break cycle until a thread is pre-empted (re-scheduled)
       while MVar is full
 
-- MVar contention may be expensive!
 
 ---
 
@@ -311,6 +336,10 @@ throwTo :: Exception e => ThreadId -> e -> IO ()
               (\file -> ...)             -- do
     </pre>
 
+<aside class="note">
+Remember the ThreadId from forkIO?
+</aside>
+
 ---
 
 title: Example
@@ -331,7 +360,7 @@ wait :: Async a -> IO a
 wait (Async m) = readMVar m
 
 -- we want to add
-cancel :: Async a -> IO ()
+<b>cancel :: Async a -> IO ()</b>
 </pre>
 
 ---
@@ -340,7 +369,7 @@ title: Example
 subtitle: Modify Async definition
 
 <pre class="prettyprint lang-hs" data-lang="HASKELL">
-newtype Async a = Async <b>ThreadId</b> (MVar a)
+data Async a = Async <b>ThreadId</b> (MVar a)
 
 async :: IO a -> IO (Async a)
 async io = do
@@ -371,6 +400,12 @@ Cancellation is an exception, so wait should return the Exception
 that was thrown...
 
 <b>Extra WIN</b>: safe handling of other errors as well
+
+<aside class="note">
+Not just that, what about errors? we naively designed
+this thinking that IO actions won't have errors on them.
+</aside>
+
 
 ---
 
@@ -466,6 +501,14 @@ subtitle: What is it?
     - much easier to get right (no deadlocks)
     - much easier to manage error conditions (async exceptions included)
 
+<aside class="note">
+<ul>
+<li>Imagine Database Transactions happening in Memory</li>
+<li>Same approach, have an execution log, sync at the very end,
+    were any vars modified while doing this? YAY try again, Nay, good to go</li>
+</ul>
+</aside>
+
 ---
 
 title: Example
@@ -474,6 +517,10 @@ subtitle: A Window Manager
 <article class="flexbox vcenter">
   <img src="images/Desktop.png" width="500px" height="400px" alt="Desktop Pic" title="Desktop Pic">
 </article>
+
+<aside class="note">
+No crazy UI code here, just logic state, how can we represent this?
+</aside>
 
 ---
 
@@ -485,7 +532,8 @@ Suppose we want to have one thread for each input/output stream:
 - On thread to listen to the user
 - One thread for each client application
 - One thread to render the display
-- All threads share the state of the desktops, at the same time.
+
+All threads share the state of the desktops at the same time.
 
 How should we represent this using Haskell's toolbelt?
 
@@ -594,7 +642,6 @@ title: STM
 subtitle: Basic API
 
 <pre class="prettyprint lang-hs" data-lang="HASKELL">
-
 data STM a -- abstract
 instance Monad STM -- amongst other things
 atomically :: STM a -> IO a
@@ -604,6 +651,10 @@ newTVar   :: STM (TVar a)
 readTVar  :: TVar a -> STM a
 writeTVar :: TVar a -> a -> STM ()
 
+data TChan a -- abstract
+newTChan :: STM (TChan a)
+readTChan :: TChan a -> STM a
+writeTChan :: TChan a -> a -> STM ()
 </pre>
 
 Implementation doesn't use a global lock, two transactions operating on
@@ -612,7 +663,7 @@ disjoint sets of TVars can work simultaneously.
 ---
 
 title: STM
-subtitle: Composability
+subtitle: Composable Transactions
 
 Write an operation to swap to Windows
 
